@@ -25,6 +25,11 @@
     input { flex: 1; padding: .6rem .9rem; font-size: 1rem; border: 1px solid #d1d5db; border-radius: .5rem; }
     button { padding: .6rem 1.2rem; font-size: 1rem; border: 0; border-radius: .5rem; background: var(--ink); color: #fff; cursor: pointer; }
     button:disabled { opacity: .5; cursor: default; }
+    .photos { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .6rem; white-space: normal; }
+    .photos figure { margin: 0; width: 200px; max-width: 100%; }
+    .photos img { width: 100%; height: 140px; object-fit: cover; border-radius: .5rem; display: block; background: #e5e7eb; }
+    .photos figcaption { font-size: .75rem; color: #4b5563; margin-top: .2rem; }
+    .photos figcaption a { color: inherit; }
   </style>
 </head>
 <body>
@@ -58,6 +63,40 @@
       return div;
     }
 
+    // One photo per suggested place, with the photographer credit Google requires.
+    function addPhotos(bubble, images) {
+      if (!Array.isArray(images) || images.length === 0) return;
+      const row = document.createElement("div");
+      row.className = "photos";
+      for (const image of images) {
+        const figure = document.createElement("figure");
+        const img = document.createElement("img");
+        img.src = image.url;
+        img.alt = image.name;
+        img.loading = "lazy";
+        img.referrerPolicy = "no-referrer";
+        const caption = document.createElement("figcaption");
+        caption.append(image.name);
+        if (image.author) {
+          caption.append(" · Photo: ");
+          // Google gives protocol-relative links like //maps.google.com/...
+          const link = /^(https:)?\/\//.test(image.author_uri ?? "");
+          const credit = document.createElement(link ? "a" : "span");
+          credit.textContent = image.author;
+          if (link) {
+            credit.href = image.author_uri;
+            credit.target = "_blank";
+            credit.rel = "noopener noreferrer";
+          }
+          caption.append(credit);
+        }
+        figure.append(img, caption);
+        row.append(figure);
+      }
+      bubble.append(row);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const message = input.value.trim();
@@ -77,6 +116,7 @@
         const data = await res.json();
         const reply = data.reply ?? data.error ?? "No reply.";
         thinking.textContent = reply;
+        addPhotos(thinking, data.images);
         // Only real replies become history, so errors are not fed back to the model.
         if (data.reply) {
           history.push({ role: "user", content: message });

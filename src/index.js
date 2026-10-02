@@ -33,8 +33,8 @@ async function handleChat(request, env) {
   }
 
   try {
-    const reply = await runLoop(history, message, env);
-    return json({ reply });
+    const { reply, images } = await runLoop(history, message, env);
+    return json({ reply, images });
   } catch (err) {
     console.error("chat failed:", err);
     return json({ error: "Uncle cannot think right now, try again later." }, 500);

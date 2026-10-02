@@ -1,5 +1,10 @@
 import { buildSystemPrompt } from "./prompt.js";
-import { toolDefinitions, executeTool } from "./tools.js";
+import {
+  toolDefinitions,
+  executeTool,
+  pickSuggestedPhotos,
+  getPhotoUrls,
+} from "./tools.js";
 
 // TODO: set the base URL and model for your OpenAI-compatible provider.
 const LLM_BASE_URL = "https://opencode.ai/zen/go/v1";
@@ -13,7 +18,8 @@ const FALLBACK_REPLY = "Just go Berseh Food Centre lah.";
 const FOOD_WORDS = /\b(eat|lunch|food|makan|hungry|restaurant|hawker)\b/i;
 
 /**
- * Run the agentic loop for one user turn and return Uncle's reply.
+ * Run the agentic loop for one user turn and return Uncle's reply, plus one
+ * image for each place the reply suggests.
  *
  * history is the prior conversation as OpenAI-style {role, content} messages.
  */
@@ -21,7 +27,7 @@ export async function runLoop(history, message, env) {
   // If the Places key is missing, Uncle cannot search for food, so give a
   // safe answer to food questions. Everything else still goes to the model.
   if (!env.GOOGLE_PLACES_API_KEY && FOOD_WORDS.test(message)) {
-    return FALLBACK_REPLY;
+    return { reply: FALLBACK_REPLY, images: [] };
   }
 
   const messages = [
@@ -34,6 +40,9 @@ export async function runLoop(history, message, env) {
   // so the OpenCode Go endpoint can route and cache consistently.
   const sessionId = crypto.randomUUID();
 
+  // Photos of every place the searches returned, keyed by place name.
+  const photos = new Map();
+
   let round = 0;
   while (round < MAX_ROUNDS) {
     const assistant = await callModel(messages, env, sessionId);
@@ -41,13 +50,16 @@ export async function runLoop(history, message, env) {
 
     const toolCalls = assistant.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      return assistant.content ?? "";
+      const reply = assistant.content ?? "";
+      console.log("DEBUG photos", [...photos.keys()]);
+      const images = await getPhotoUrls(pickSuggestedPhotos(reply, photos), env);
+      return { reply, images };
     }
 
     for (const call of toolCalls) {
       const args = parseArgs(call.function.arguments);
       console.log(`round ${round}: ${call.function.name}`, args);
-      const result = await executeTool(call.function.name, args, env);
+      const result = await executeTool(call.function.name, args, env, photos);
       messages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -57,7 +69,10 @@ export async function runLoop(history, message, env) {
     round++;
   }
 
-  return "Uncle tried too many times already. Ask something simpler.";
+  return {
+    reply: "Uncle tried too many times already. Ask something simpler.",
+    images: [],
+  };
 }
 
 async function callModel(messages, env, sessionId) {

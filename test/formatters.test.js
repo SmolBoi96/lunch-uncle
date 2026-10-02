@@ -4,6 +4,8 @@ import {
   formatForecast,
   formatBusArrivals,
   formatPlaces,
+  formatPlacePhotos,
+  pickSuggestedPhotos,
   CT_HUB_2,
   haversineMetres,
 } from "../src/tools.js";
@@ -114,4 +116,61 @@ test("sanitizeHistory keeps only recent user and assistant text", () => {
   const kept = sanitizeHistory(long);
   assert.equal(kept.length, 20);
   assert.equal(kept.at(-1).content, "29");
+});
+
+test("formatPlacePhotos keeps the first photo and its credit", () => {
+  const places = [
+    {
+      displayName: { text: "Wang Fu Dim Sum @ Aperia Mall" },
+      photos: [
+        {
+          name: "places/abc/photos/first",
+          authorAttributions: [{ displayName: "Ah Seng", uri: "//maps.google.com/maps/contrib/1" }],
+        },
+        { name: "places/abc/photos/second" },
+      ],
+    },
+    { displayName: { text: "No photos" } },
+  ];
+
+  assert.deepEqual(formatPlacePhotos(places), [
+    {
+      name: "Wang Fu Dim Sum @ Aperia Mall",
+      ref: "places/abc/photos/first",
+      author: "Ah Seng",
+      author_uri: "//maps.google.com/maps/contrib/1",
+    },
+  ]);
+});
+
+test("pickSuggestedPhotos matches places named in the reply, in order", () => {
+  const photo = (name) => [name, { name, ref: `ref:${name}` }];
+  const photos = new Map([
+    photo("Wang Fu Dim Sum @ Aperia Mall"),
+    photo("Blanco Court Beef Noodles Aperia Mall"),
+    photo("Hwa Heng Beef Noodle"),
+    photo("Lan Ting Xu Beef Noodles 兰亭序 (Farrer Park）"),
+    photo("Lan Ting Xu Beef Noodles 兰亭序（Guoco Midtown）"),
+    photo("Kaeden"),
+    photo("Viva Lavender"),
+  ]);
+
+  const reply =
+    "Go Blanco Court Beef Noodles at Aperia. Or Hwa Heng if you want soup. " +
+    "Wang Fu Dim Sum also can.";
+  assert.deepEqual(
+    pickSuggestedPhotos(reply, photos).map((p) => p.name),
+    [
+      "Blanco Court Beef Noodles Aperia Mall",
+      "Hwa Heng Beef Noodle",
+      "Wang Fu Dim Sum @ Aperia Mall",
+    ],
+  );
+
+  // Two branches of the same name only give one photo.
+  assert.equal(pickSuggestedPhotos("Try Lan Ting Xu Beef Noodles.", photos).length, 1);
+  // Whole words only: "Kaedenburg" is not "Kaeden".
+  assert.deepEqual(pickSuggestedPhotos("Kaedenburg is far.", photos), []);
+  assert.equal(pickSuggestedPhotos("Kaeden, Viva Lavender, Hwa Heng", photos, 2).length, 2);
+  assert.deepEqual(pickSuggestedPhotos("Just eat at home.", photos), []);
 });

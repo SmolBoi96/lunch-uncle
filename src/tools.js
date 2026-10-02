@@ -13,8 +13,11 @@ const SEARCH_RADIUS_METRES = 800;
 const MAX_PLACES = 10;
 const FORECAST_AREA = "Kallang";
 const TOOL_TIMEOUT_MS = 8_000;
+const MAX_PHOTOS = 3;
+const PHOTO_WIDTH_PX = 480;
 
 const PLACES_URL = "https://places.googleapis.com/v1/places:searchText";
+const PLACES_MEDIA_URL = "https://places.googleapis.com/v1/";
 const FORECAST_URL =
   "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast";
 const BUS_URL = "https://arrivelah2.busrouter.sg/";
@@ -82,12 +85,21 @@ export const toolDefinitions = [
 
 /**
  * Run one tool call requested by the model and return the result as a string.
+ *
+ * Photo references from place searches are collected into photos, keyed by
+ * place name, so the loop can attach images to the final reply without
+ * sending long photo ids to the model.
  */
-export async function executeTool(name, args, env) {
+export async function executeTool(name, args, env, photos = new Map()) {
   try {
     switch (name) {
-      case "find_lunch_places":
-        return JSON.stringify(await findLunchPlaces(args, env));
+      case "find_lunch_places": {
+        const { photos: found = [], ...result } = await findLunchPlaces(args, env);
+        for (const photo of found) {
+          photos.set(photo.name, photo);
+        }
+        return JSON.stringify(result);
+      }
       case "get_rain_forecast":
         return JSON.stringify(await getRainForecast());
       case "get_bus_arrivals":
@@ -125,7 +137,7 @@ async function findLunchPlaces({ query, open_now = false }, env) {
       "content-type": "application/json",
       "X-Goog-Api-Key": env.GOOGLE_PLACES_API_KEY,
       "X-Goog-FieldMask":
-        "places.id,places.displayName,places.location,places.rating,places.currentOpeningHours",
+        "places.id,places.displayName,places.location,places.rating,places.currentOpeningHours,places.photos",
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
@@ -136,7 +148,10 @@ async function findLunchPlaces({ query, open_now = false }, env) {
   }
 
   const data = await res.json();
-  return { places: formatPlaces(data.places ?? [], centre) };
+  return {
+    places: formatPlaces(data.places ?? [], centre),
+    photos: formatPlacePhotos(data.places ?? []),
+  };
 }
 
 /**
@@ -150,6 +165,119 @@ export function formatPlaces(places, origin) {
     // null when Google has no opening hours for the place.
     open_now: currentOpeningHours?.openNow ?? null,
   }));
+}
+
+/**
+ * Take the first photo of each place, with the credit Google requires us to show.
+ */
+export function formatPlacePhotos(places) {
+  return places
+    .filter((p) => p.photos?.[0]?.name)
+    .map(({ displayName, photos: [photo] }) => {
+      const author = photo.authorAttributions?.[0];
+      return {
+        name: displayName?.text ?? "Unnamed",
+        ref: photo.name,
+        author: author?.displayName ?? null,
+        author_uri: author?.uri ?? null,
+      };
+    });
+}
+
+/**
+ * Pick the photos for places that the reply actually names, in reply order.
+ *
+ * Uncle often shortens names, e.g. "Hwa Heng" for "Hwa Heng Beef Noodle" or
+ * "Blanco Court Beef Noodles" for "Blanco Court Beef Noodles Aperia Mall",
+ * so the first two or more words of a name also count as a match. When two
+ * places match at the same spot, such as two branches, the longer match wins.
+ */
+export function pickSuggestedPhotos(reply, photos, max = MAX_PHOTOS) {
+  const text = reply.toLowerCase();
+  const byPosition = new Map();
+  for (const photo of photos.values()) {
+    const match = findName(text, photo.name.toLowerCase());
+    if (!match) continue;
+    const best = byPosition.get(match.position);
+    if (!best || match.length > best.length) {
+      byPosition.set(match.position, { ...match, photo });
+    }
+  }
+  return [...byPosition.values()]
+    .sort((a, b) => a.position - b.position)
+    .slice(0, max)
+    .map(({ photo }) => photo);
+}
+
+// Find the longest leading part of a place name that appears in text as
+// whole words. Branch details after "@", "(", "|" or " - " are ignored.
+function findName(text, name) {
+  const core = name.split(/\s*[@|(（]|\s[-–]\s/)[0].trim();
+  const words = core.split(/\s+/).filter(Boolean);
+  const shortest = words.length === 1 ? 1 : 2;
+  for (let n = words.length; n >= shortest; n--) {
+    const phrase = words.slice(0, n).join(" ");
+    if (phrase.length < 4) break;
+    const position = indexOfWords(text, phrase);
+    if (position >= 0) return { position, length: phrase.length };
+  }
+  return null;
+}
+
+function indexOfWords(text, phrase) {
+  const isWordChar = (c) => c !== undefined && /[\p{L}\p{N}]/u.test(c);
+  let at = text.indexOf(phrase);
+  while (at >= 0) {
+    if (!isWordChar(text[at - 1]) && !isWordChar(text[at + phrase.length])) {
+      return at;
+    }
+    at = text.indexOf(phrase, at + 1);
+  }
+  return -1;
+}
+
+/**
+ * Turn picked photos into public image URLs the browser can load.
+ *
+ * Google's media endpoint needs the API key, so the Worker asks it for the
+ * final image URL instead of sending the key to the browser.
+ */
+export async function getPhotoUrls(photos, env) {
+  const results = await Promise.all(
+    photos.map(async (photo) => {
+      try {
+        const url =
+          `${PLACES_MEDIA_URL}${photo.ref}/media` +
+          `?maxWidthPx=${PHOTO_WIDTH_PX}&skipHttpRedirect=true`;
+        const res = await fetch(url, {
+          headers: { "X-Goog-Api-Key": env.GOOGLE_PLACES_API_KEY },
+          signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
+        });
+        if (!res.ok) {
+          console.error(`photo for ${photo.name} returned ${res.status}`);
+          return null;
+        }
+        const { photoUri } = await res.json();
+        return photoUri ? formatImage(photo, photoUri) : null;
+      } catch (err) {
+        console.error(`photo for ${photo.name} failed:`, err);
+        return null;
+      }
+    }),
+  );
+  return results.filter(Boolean);
+}
+
+/**
+ * Shape one image for the chat page.
+ */
+export function formatImage(photo, url) {
+  return {
+    name: photo.name,
+    url,
+    author: photo.author,
+    author_uri: photo.author_uri,
+  };
 }
 
 /**
