@@ -19,8 +19,23 @@ How you work:
 /**
  * Build the system prompt for one request.
  */
-export function buildSystemPrompt() {
-  const requestId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  return `Request ${requestId} at ${now}. ${PERSONA}`;
+export function buildSystemPrompt(now = new Date()) {
+  // Keep the fixed persona first so the provider can cache it, and put the
+  // part that changes every request at the end.
+  return `${PERSONA}\n\nIt is now ${formatSingaporeTime(now)} in Singapore.`;
+}
+
+/**
+ * Format a date as Singapore local time, e.g. "Friday, 2 October 2026 at 12:30 pm".
+ */
+export function formatSingaporeTime(date) {
+  return date.toLocaleString("en-SG", {
+    timeZone: "Asia/Singapore",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

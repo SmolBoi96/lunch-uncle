@@ -7,6 +7,7 @@ const LLM_MODEL = "deepseek-v4.1-flash";
 
 const LLM_TIMEOUT_MS = 20_000;
 const MAX_ROUNDS = 8;
+const MAX_HISTORY = 20;
 
 const FALLBACK_REPLY = "Just go Berseh Food Centre lah.";
 const FOOD_WORDS = /\b(eat|lunch|food|makan|hungry|restaurant|hawker)\b/i;
@@ -25,7 +26,7 @@ export async function runLoop(history, message, env) {
 
   const messages = [
     { role: "system", content: buildSystemPrompt() },
-    ...history,
+    ...sanitizeHistory(history),
     { role: "user", content: message },
   ];
 
@@ -53,6 +54,7 @@ export async function runLoop(history, message, env) {
         content: result,
       });
     }
+    round++;
   }
 
   return "Uncle tried too many times already. Ask something simpler.";
@@ -80,6 +82,26 @@ async function callModel(messages, env, sessionId) {
 
   const data = await res.json();
   return data.choices[0].message;
+}
+
+/**
+ * Keep only the last few user and assistant text messages from the client.
+ *
+ * The browser sends history, so it cannot be trusted to contain system or
+ * tool messages, or to stay a reasonable size.
+ */
+export function sanitizeHistory(history) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+  return history
+    .filter(
+      (m) =>
+        (m?.role === "user" || m?.role === "assistant") &&
+        typeof m.content === "string",
+    )
+    .slice(-MAX_HISTORY)
+    .map(({ role, content }) => ({ role, content }));
 }
 
 function parseArgs(raw) {
