@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   formatForecast,
   formatBusArrivals,
+  formatPlaces,
+  CT_HUB_2,
   haversineMetres,
 } from "../src/tools.js";
 
@@ -54,4 +56,19 @@ test("haversineMetres measures CT Hub 2 to Lavender MRT at under 600 m", () => {
   const lavenderMrt = { latitude: 1.3073, longitude: 103.8631 };
   const distance = haversineMetres(ctHub2, lavenderMrt);
   assert.ok(distance > 400 && distance < 550, `got ${distance}`);
+});
+
+test("formatPlaces measures distance from CT Hub 2", () => {
+  const places = [
+    {
+      displayName: { text: "Lavender Food Square" },
+      rating: 4.1,
+      location: { latitude: 1.3073, longitude: 103.8631 },
+    },
+  ];
+
+  const [place] = formatPlaces(places, CT_HUB_2);
+  assert.equal(place.name, "Lavender Food Square");
+  assert.equal(place.rating, 4.1);
+  assert.ok(place.distance_m > 400 && place.distance_m < 550, `got ${place.distance_m}`);
 });
